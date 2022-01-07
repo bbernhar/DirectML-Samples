@@ -22,6 +22,7 @@
 
 #include "RenderTargetState.h"
 
+#include <gpgmm_d3d12.h>
 
 namespace DirectX
 {
@@ -85,7 +86,7 @@ namespace DirectX
     class SpriteBatch
     {
     public:
-        SpriteBatch(_In_ ID3D12Device* device, ResourceUploadBatch& upload, const SpriteBatchPipelineStateDescription& psoDesc, _In_opt_ const D3D12_VIEWPORT* viewport = nullptr);
+        SpriteBatch(_In_ ID3D12Device* device, _In_ gpgmm::d3d12::ResourceAllocator* resourceAllocator, ResourceUploadBatch& upload, const SpriteBatchPipelineStateDescription& psoDesc, _In_opt_ const D3D12_VIEWPORT* viewport = nullptr);
         SpriteBatch(SpriteBatch&& moveFrom) noexcept;
         SpriteBatch& operator= (SpriteBatch&& moveFrom) noexcept;
 

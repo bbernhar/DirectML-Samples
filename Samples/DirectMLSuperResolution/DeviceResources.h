@@ -4,6 +4,10 @@
 
 #pragma once
 
+#include <gpgmm_d3d12.h>
+
+using namespace gpgmm::d3d12;
+
 namespace DX
 {
     // Provides an interface for an application that owns DeviceResources to be notified of the device being lost or created.
@@ -49,7 +53,7 @@ namespace DX
         IDXGIFactory4*              GetDXGIFactory() const          { return m_dxgiFactory.Get(); }
         D3D_FEATURE_LEVEL           GetDeviceFeatureLevel() const   { return m_d3dFeatureLevel; }
         ID3D12Resource*             GetRenderTarget() const         { return m_renderTargets[m_backBufferIndex].Get(); }
-        ID3D12Resource*             GetDepthStencil() const         { return m_depthStencil.Get(); }
+        ID3D12Resource*             GetDepthStencil() const         { return m_depthStencil->GetResource(); }
         ID3D12CommandQueue*         GetCommandQueue() const         { return m_commandQueue.Get(); }
         ID3D12CommandAllocator*     GetCommandAllocator() const     { return m_commandAllocators[m_backBufferIndex].Get(); }
         ID3D12GraphicsCommandList*  GetCommandList() const          { return m_commandList.Get(); }
@@ -61,6 +65,7 @@ namespace DX
         UINT                        GetBackBufferCount() const      { return m_backBufferCount; }
         DXGI_COLOR_SPACE_TYPE       GetColorSpace() const           { return m_colorSpace; }
         unsigned int                GetDeviceOptions() const        { return m_options; }
+        ResourceAllocator*          GetResourceAllocator() const    { return m_resourceAllocator.Get(); };
 
         CD3DX12_CPU_DESCRIPTOR_HANDLE GetRenderTargetView() const
         {
@@ -87,12 +92,13 @@ namespace DX
         Microsoft::WRL::ComPtr<ID3D12CommandQueue>          m_commandQueue;
         Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList>   m_commandList;
         Microsoft::WRL::ComPtr<ID3D12CommandAllocator>      m_commandAllocators[MAX_BACK_BUFFER_COUNT];
+        Microsoft::WRL::ComPtr<ResourceAllocator>           m_resourceAllocator;
 
         // Swap chain objects.
         Microsoft::WRL::ComPtr<IDXGIFactory4>               m_dxgiFactory;
         Microsoft::WRL::ComPtr<IDXGISwapChain3>             m_swapChain;
         Microsoft::WRL::ComPtr<ID3D12Resource>              m_renderTargets[MAX_BACK_BUFFER_COUNT];
-        Microsoft::WRL::ComPtr<ID3D12Resource>              m_depthStencil;
+        Microsoft::WRL::ComPtr<ResourceAllocation>          m_depthStencil;
 
         // Presentation fence objects.
         Microsoft::WRL::ComPtr<ID3D12Fence>                 m_fence;

@@ -75,8 +75,8 @@ namespace
     class DeviceAllocator
     {
     public:
-        DeviceAllocator(_In_ ID3D12Device* device)
-            : mDevice(device)
+        DeviceAllocator(_In_ ID3D12Device* device, _In_ ResourceAllocator* resourceAllocator)
+            : mDevice(device), mResourceAllocator(resourceAllocator)
         {
             if (!device)
                 throw std::invalid_argument("Invalid device parameter");
@@ -86,6 +86,7 @@ namespace
                 size_t pageSize = GetPageSizeFromPoolIndex(i);
                 mPools[i] = std::make_unique<LinearAllocator>(
                     mDevice.Get(),
+                    mResourceAllocator.Get(),
                     pageSize);
             }
         }
@@ -168,6 +169,7 @@ namespace
 
     private:
         ComPtr<ID3D12Device> mDevice;
+        ComPtr<ResourceAllocator> mResourceAllocator;
         std::array<std::unique_ptr<LinearAllocator>, AllocatorPoolCount> mPools;
         mutable std::mutex mMutex;
     };
@@ -207,9 +209,9 @@ public:
         mDeviceAllocator.reset();
     }
 
-    void Initialize(_In_ ID3D12Device* device)
+    void Initialize(_In_ ID3D12Device* device, _In_ ResourceAllocator* resourceAllocator)
     {
-        mDeviceAllocator = std::make_unique<DeviceAllocator>(device);
+        mDeviceAllocator = std::make_unique<DeviceAllocator>(device, resourceAllocator);
 
     #if !defined(_XBOX_ONE) || !defined(_TITLE)
         if (s_graphicsMemory.find(device) != s_graphicsMemory.cend())
@@ -258,10 +260,10 @@ std::map<ID3D12Device*, GraphicsMemory::Impl*> GraphicsMemory::Impl::s_graphicsM
 //--------------------------------------------------------------------------------------
 
 // Public constructor.
-GraphicsMemory::GraphicsMemory(_In_ ID3D12Device* device)
+GraphicsMemory::GraphicsMemory(_In_ ID3D12Device* device, _In_ ResourceAllocator* resourceAllocator)
     : pImpl(std::make_unique<Impl>(this))
 {
-    pImpl->Initialize(device);
+    pImpl->Initialize(device, resourceAllocator);
 }
 
 

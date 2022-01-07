@@ -138,16 +138,16 @@ private:
         const char* shiftLayerName,
         dml::Span<const uint32_t> filterSizes,
         DirectX::ResourceUploadBatch& uploadBatch,
-        _Out_writes_(1) ID3D12Resource** filterWeightResourceOut,
-        _Out_writes_opt_(1) ID3D12Resource** biasWeightResourceOut);
+        _Out_writes_(1) ResourceAllocation** filterWeightResourceOut,
+        _Out_writes_opt_(1) ResourceAllocation** biasWeightResourceOut);
     void CreateWeightResource(
         _In_reads_(4) const uint32_t* tensorSizes,
-        _Out_writes_(1) ID3D12Resource** d3dResourceOut);
+        _Out_writes_(1) ResourceAllocation** d3dResourceOut);
     void CreateWindowSizeDependentResources();
     void BindTempResourceIfNeeded(
         DML_BINDING_PROPERTIES& bindingProps,
         _In_reads_(1) IDMLBindingTable* initBindingTable,
-        _Out_writes_opt_(1) ID3D12Resource** tempResource);
+        _Out_writes_opt_(1) ResourceAllocation** tempResource);
 
     // DirectML method for setting up Tensors and creating operators
 #if !(USE_DMLX)
@@ -198,11 +198,11 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState>     m_tensorRenderPipelineState;
     Microsoft::WRL::ComPtr<ID3D12Resource>          m_texture;                      // Static input texture to render, if USE_VIDEO == 0
     Microsoft::WRL::ComPtr<ID3D12Resource>          m_videoTexture;                 // Input video frame to render, if USE_VIDEO == 1
-    Microsoft::WRL::ComPtr<ID3D12Resource>          m_finalResultTexture;           // Upscaled 4K texture output
+    Microsoft::WRL::ComPtr<ResourceAllocation>      m_finalResultTexture;           // Upscaled 4K texture output
     uint32_t                                        m_origTextureHeight;
     uint32_t                                        m_origTextureWidth;
-    Microsoft::WRL::ComPtr<ID3D12Resource>          m_vertexBuffer;
-    Microsoft::WRL::ComPtr<ID3D12Resource>          m_indexBuffer;
+    Microsoft::WRL::ComPtr<ResourceAllocation>      m_vertexBuffer;
+    Microsoft::WRL::ComPtr<ResourceAllocation>      m_indexBuffer;
     D3D12_VERTEX_BUFFER_VIEW                        m_vertexBufferView;
     D3D12_INDEX_BUFFER_VIEW                         m_indexBufferView;
 
@@ -236,8 +236,8 @@ private:
     // Shared Resources
     std::unique_ptr<DirectX::DescriptorHeap>        m_dmlDescriptorHeap;
     
-    Microsoft::WRL::ComPtr<ID3D12Resource>          m_modelInput;
-    Microsoft::WRL::ComPtr<ID3D12Resource>          m_modelOutput;
+    Microsoft::WRL::ComPtr<ResourceAllocation>      m_modelInput;
+    Microsoft::WRL::ComPtr<ResourceAllocation>      m_modelOutput;
 
     // DirectML Model Resources
 #if !(USE_DMLX)
@@ -254,11 +254,11 @@ private:
 #endif
 
     // DirectMLX Model Resources
-    Microsoft::WRL::ComPtr<ID3D12Resource>          m_modelConvFilterWeights[c_numConvLayers];
-    Microsoft::WRL::ComPtr<ID3D12Resource>          m_modelConvBiasWeights[c_numConvLayers];
+    Microsoft::WRL::ComPtr<ResourceAllocation>      m_modelConvFilterWeights[c_numConvLayers];
+    Microsoft::WRL::ComPtr<ResourceAllocation>      m_modelConvBiasWeights[c_numConvLayers];
 
-    Microsoft::WRL::ComPtr<ID3D12Resource>          m_modelPersistentResource;
-    Microsoft::WRL::ComPtr<ID3D12Resource>          m_modelTemporaryResource;
+    Microsoft::WRL::ComPtr<ResourceAllocation>      m_modelPersistentResource;
+    Microsoft::WRL::ComPtr<ResourceAllocation>      m_modelTemporaryResource;
 
     // DirectML operations
 #if !(USE_DMLX)

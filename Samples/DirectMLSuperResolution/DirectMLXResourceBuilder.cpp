@@ -8,6 +8,8 @@
 #include "ReadData.h"
 #include "Float16Compressor.h"
 
+#include <gpgmm_d3d12.h>
+
 using Microsoft::WRL::ComPtr;
 
 using namespace DirectX;
@@ -58,6 +60,8 @@ void Sample::CreateDirectMLResources()
             device->CreateComputePipelineState(&descComputePSO, IID_PPV_ARGS(m_computePSO.ReleaseAndGetAddressOf())));
         m_computePSO->SetName(L"Compute PSO");
     }
+
+    auto resourceAllocator = m_deviceResources->GetResourceAllocator();
 
     // Shader for rendering DML result tensor to texture
     // This can also be done with a compute shader, depending on the app's needs.
@@ -128,27 +132,29 @@ void Sample::CreateDirectMLResources()
         txtDesc.Height = m_origTextureHeight * 2;
         txtDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
 
+        gpgmm::d3d12::ALLOCATION_DESC allocationDesc = {};
+        allocationDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+
         DX::ThrowIfFailed(
-            device->CreateCommittedResource(
-                &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
-                D3D12_HEAP_FLAG_NONE,
-                &txtDesc,
+            resourceAllocator->CreateResource(
+                allocationDesc,
+                txtDesc,
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
                 &CD3DX12_CLEAR_VALUE(DXGI_FORMAT_B8G8R8A8_UNORM, DirectX::Colors::Black),
-                IID_PPV_ARGS(m_finalResultTexture.ReleaseAndGetAddressOf())));
+                &m_finalResultTexture));
 
         // Create an RTV for rendering to the texture, and an SRV for rendering it back to the screen
         D3D12_RENDER_TARGET_VIEW_DESC rtvDesc = {};
         rtvDesc.Format = txtDesc.Format;
         rtvDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
-        device->CreateRenderTargetView(m_finalResultTexture.Get(), &rtvDesc, m_RTVDescriptorHeap->GetCpuHandle(e_descFinalResultTextureRtv));
+        device->CreateRenderTargetView(m_finalResultTexture->GetResource(), &rtvDesc, m_RTVDescriptorHeap->GetCpuHandle(e_descFinalResultTextureRtv));
 
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
         srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srvDesc.Format = txtDesc.Format;
         srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         srvDesc.Texture2D.MipLevels = 1;
-        device->CreateShaderResourceView(m_finalResultTexture.Get(), &srvDesc, m_SRVDescriptorHeap->GetCpuHandle(e_descFinalResultTextureSrv));
+        device->CreateShaderResourceView(m_finalResultTexture->GetResource(), &srvDesc, m_SRVDescriptorHeap->GetCpuHandle(e_descFinalResultTextureSrv));
     }
 
     // DirectML device
@@ -210,7 +216,7 @@ void Sample::CreateDirectMLResources()
 
 
         // Upload weights to the GPU
-        DirectX::ResourceUploadBatch weightUploadBatch(device);
+        DirectX::ResourceUploadBatch weightUploadBatch(device, resourceAllocator);
         weightUploadBatch.Begin();
 
         CreateWeightTensors(weights, "conv1/weights", "conv1/BatchNorm/scale", "conv1/BatchNorm/shift",
@@ -332,13 +338,15 @@ void Sample::CreateDirectMLResources()
         // Resource for input tensor
         D3D12_RESOURCE_DESC resourceDesc = CD3DX12_RESOURCE_DESC::Buffer(modelInputBufferSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
 
-        DX::ThrowIfFailed(device->CreateCommittedResource(
-            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
-            D3D12_HEAP_FLAG_NONE,
-            &resourceDesc,
+        gpgmm::d3d12::ALLOCATION_DESC allocationDesc = {};
+        allocationDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+
+        DX::ThrowIfFailed(resourceAllocator->CreateResource(
+            allocationDesc,
+            resourceDesc,
             D3D12_RESOURCE_STATE_COMMON,
             nullptr,
-            IID_PPV_ARGS(&m_modelInput)
+            &m_modelInput
         ));
 
         // Describe and create a UAV for the original input tensor.
@@ -350,17 +358,16 @@ void Sample::CreateDirectMLResources()
         uavDesc.Buffer.StructureByteStride = 0;
         uavDesc.Buffer.CounterOffsetInBytes = 0;
         uavDesc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
-        device->CreateUnorderedAccessView(m_modelInput.Get(), nullptr, &uavDesc, m_SRVDescriptorHeap->GetCpuHandle(e_descModelInput));
+        device->CreateUnorderedAccessView(m_modelInput->GetResource(), nullptr, &uavDesc, m_SRVDescriptorHeap->GetCpuHandle(e_descModelInput));
 
         // Model result tensor is 2x larger in both dimensions
         resourceDesc.Width = modelOutputBufferSize;
-        DX::ThrowIfFailed(device->CreateCommittedResource(
-            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
-            D3D12_HEAP_FLAG_NONE,
-            &resourceDesc,
+        DX::ThrowIfFailed(resourceAllocator->CreateResource(
+            allocationDesc,
+            resourceDesc,
             D3D12_RESOURCE_STATE_COMMON,
             nullptr,
-            IID_PPV_ARGS(&m_modelOutput)
+            &m_modelOutput
         ));
 
         // Describe and create a SRV for the final result tensor.
@@ -372,7 +379,7 @@ void Sample::CreateDirectMLResources()
         srvDesc.Buffer.NumElements = static_cast<UINT>(modelOutputBufferSize / sizeof(uint16_t));
         srvDesc.Buffer.StructureByteStride = 0;
         srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
-        device->CreateShaderResourceView(m_modelOutput.Get(), &srvDesc, m_SRVDescriptorHeap->GetCpuHandle(e_descModelOutput));
+        device->CreateShaderResourceView(m_modelOutput->GetResource(), &srvDesc, m_SRVDescriptorHeap->GetCpuHandle(e_descModelOutput));
     }
 
     // Wait until assets have been uploaded to the GPU.
@@ -399,6 +406,8 @@ void Sample::InitializeDirectMLResources()
     ID3D12DescriptorHeap* pHeaps[] = { m_dmlDescriptorHeap->Heap() };
     commandList->SetDescriptorHeaps(_countof(pHeaps), pHeaps);
 
+    auto resourceAllocator = m_deviceResources->GetResourceAllocator();
+
     // Create any persistent resources required for the operators.
     if (executeBindingProps.PersistentResourceSize > 0)
     {
@@ -406,13 +415,15 @@ void Sample::InitializeDirectMLResources()
             executeBindingProps.PersistentResourceSize,
             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
 
-        DX::ThrowIfFailed(m_deviceResources->GetD3DDevice()->CreateCommittedResource(
-            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
-            D3D12_HEAP_FLAG_NONE,
-            &resourceDesc,
+        gpgmm::d3d12::ALLOCATION_DESC allocationDesc = {};
+        allocationDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+
+        DX::ThrowIfFailed(resourceAllocator->CreateResource(
+            allocationDesc,
+            resourceDesc,
             D3D12_RESOURCE_STATE_COMMON,
             nullptr,
-            IID_PPV_ARGS(&m_modelPersistentResource)));
+            &m_modelPersistentResource));
     }
 
     // Temporary resource for execution
@@ -422,30 +433,34 @@ void Sample::InitializeDirectMLResources()
             executeBindingProps.TemporaryResourceSize,
             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
 
-        DX::ThrowIfFailed(m_deviceResources->GetD3DDevice()->CreateCommittedResource(
-            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
-            D3D12_HEAP_FLAG_NONE,
-            &resourceDesc,
+        gpgmm::d3d12::ALLOCATION_DESC allocationDesc = {};
+        allocationDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+
+        DX::ThrowIfFailed(resourceAllocator->CreateResource(
+            allocationDesc,
+            resourceDesc,
             D3D12_RESOURCE_STATE_COMMON,
             nullptr,
-            IID_PPV_ARGS(&m_modelTemporaryResource)));
+            &m_modelTemporaryResource));
     }
 
     // If the execute temporary resource isn't big enough for initialization, create a bigger buffer
-    ComPtr<ID3D12Resource> initTemporaryResource;
+    ComPtr<gpgmm::d3d12::ResourceAllocation> initTemporaryResource;
     if (initBindingProps.TemporaryResourceSize > executeBindingProps.TemporaryResourceSize)
     {
         D3D12_RESOURCE_DESC resourceDesc = CD3DX12_RESOURCE_DESC::Buffer(
             initBindingProps.TemporaryResourceSize,
             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
 
-        DX::ThrowIfFailed(m_deviceResources->GetD3DDevice()->CreateCommittedResource(
-            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
-            D3D12_HEAP_FLAG_NONE,
-            &resourceDesc,
+        gpgmm::d3d12::ALLOCATION_DESC allocationDesc = {};
+        allocationDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+
+        DX::ThrowIfFailed(resourceAllocator->CreateResource(
+            allocationDesc,
+            resourceDesc,
             D3D12_RESOURCE_STATE_COMMON,
             nullptr,
-            IID_PPV_ARGS(&initTemporaryResource)));
+            &initTemporaryResource));
     }
     else if (initBindingProps.TemporaryResourceSize > 0)
     {
@@ -467,13 +482,13 @@ void Sample::InitializeDirectMLResources()
     DML_BUFFER_BINDING bufferBindings[] =
     {
         {}, // model input
-        { m_modelConvFilterWeights[0].Get(), 0, m_modelConvFilterWeights[0]->GetDesc().Width }, { m_modelConvBiasWeights[0].Get(), 0, m_modelConvBiasWeights[0]->GetDesc().Width },
-        { m_modelConvFilterWeights[1].Get(), 0, m_modelConvFilterWeights[1]->GetDesc().Width }, { m_modelConvBiasWeights[1].Get(), 0, m_modelConvBiasWeights[1]->GetDesc().Width },
-        { m_modelConvFilterWeights[2].Get(), 0, m_modelConvFilterWeights[2]->GetDesc().Width }, { m_modelConvBiasWeights[2].Get(), 0, m_modelConvBiasWeights[2]->GetDesc().Width },
-        { m_modelConvFilterWeights[3].Get(), 0, m_modelConvFilterWeights[3]->GetDesc().Width }, { m_modelConvBiasWeights[3].Get(), 0, m_modelConvBiasWeights[3]->GetDesc().Width },
-        { m_modelConvFilterWeights[4].Get(), 0, m_modelConvFilterWeights[4]->GetDesc().Width }, { m_modelConvBiasWeights[4].Get(), 0, m_modelConvBiasWeights[4]->GetDesc().Width },
-        { m_modelConvFilterWeights[5].Get(), 0, m_modelConvFilterWeights[5]->GetDesc().Width }, { m_modelConvBiasWeights[5].Get(), 0, m_modelConvBiasWeights[5]->GetDesc().Width },
-        { m_modelConvFilterWeights[6].Get(), 0, m_modelConvFilterWeights[6]->GetDesc().Width }, // last layer has no bias
+        { m_modelConvFilterWeights[0]->GetResource(), 0, m_modelConvFilterWeights[0]->GetResource()->GetDesc().Width }, { m_modelConvBiasWeights[0]->GetResource(), 0, m_modelConvBiasWeights[0]->GetResource()->GetDesc().Width },
+        { m_modelConvFilterWeights[1]->GetResource(), 0, m_modelConvFilterWeights[1]->GetResource()->GetDesc().Width }, { m_modelConvBiasWeights[1]->GetResource(), 0, m_modelConvBiasWeights[1]->GetResource()->GetDesc().Width },
+        { m_modelConvFilterWeights[2]->GetResource(), 0, m_modelConvFilterWeights[2]->GetResource()->GetDesc().Width }, { m_modelConvBiasWeights[2]->GetResource(), 0, m_modelConvBiasWeights[2]->GetResource()->GetDesc().Width },
+        { m_modelConvFilterWeights[3]->GetResource(), 0, m_modelConvFilterWeights[3]->GetResource()->GetDesc().Width }, { m_modelConvBiasWeights[3]->GetResource(), 0, m_modelConvBiasWeights[3]->GetResource()->GetDesc().Width },
+        { m_modelConvFilterWeights[4]->GetResource(), 0, m_modelConvFilterWeights[4]->GetResource()->GetDesc().Width }, { m_modelConvBiasWeights[4]->GetResource(), 0, m_modelConvBiasWeights[4]->GetResource()->GetDesc().Width },
+        { m_modelConvFilterWeights[5]->GetResource(), 0, m_modelConvFilterWeights[5]->GetResource()->GetDesc().Width }, { m_modelConvBiasWeights[5]->GetResource(), 0, m_modelConvBiasWeights[5]->GetResource()->GetDesc().Width },
+        { m_modelConvFilterWeights[6]->GetResource(), 0, m_modelConvFilterWeights[6]->GetResource()->GetDesc().Width }, // last layer has no bias
     };
 
     // Bind inputs for initialization, which is only necessary if we're using OWNED_BY_DML
@@ -487,14 +502,14 @@ void Sample::InitializeDirectMLResources()
 
     if (initTemporaryResource)
     {
-        DML_BUFFER_BINDING binding = { initTemporaryResource.Get(), 0, initTemporaryResource->GetDesc().Width };
+        DML_BUFFER_BINDING binding = { initTemporaryResource->GetResource(), 0, initTemporaryResource->GetResource()->GetDesc().Width };
         initBindingTable->BindTemporaryResource(&DML_BINDING_DESC{ DML_BINDING_TYPE_BUFFER, &binding });
     }
 
     // If the operator requires a persistent resource, it must be bound as output for the initializer.
     if (m_modelPersistentResource)
     {
-        DML_BUFFER_BINDING binding = { m_modelPersistentResource.Get(), 0, m_modelPersistentResource->GetDesc().Width };
+        DML_BUFFER_BINDING binding = { m_modelPersistentResource->GetResource(), 0, m_modelPersistentResource->GetResource()->GetDesc().Width };
         initBindingTable->BindOutputs(1, &DML_BINDING_DESC{ DML_BINDING_TYPE_BUFFER, &binding });
     }
 
@@ -529,18 +544,18 @@ void Sample::InitializeDirectMLResources()
 
     if (m_modelPersistentResource)
     {
-        DML_BUFFER_BINDING binding = { m_modelPersistentResource.Get(), 0, m_modelPersistentResource->GetDesc().Width };
+        DML_BUFFER_BINDING binding = { m_modelPersistentResource->GetResource(), 0, m_modelPersistentResource->GetResource()->GetDesc().Width };
         m_dmlBindingTable->BindPersistentResource(&DML_BINDING_DESC{ DML_BINDING_TYPE_BUFFER, &binding });
     }
 
     if (m_modelTemporaryResource)
     {
-        DML_BUFFER_BINDING binding = { m_modelTemporaryResource.Get(), 0, m_modelTemporaryResource->GetDesc().Width };
+        DML_BUFFER_BINDING binding = { m_modelTemporaryResource->GetResource(), 0, m_modelTemporaryResource->GetResource()->GetDesc().Width };
         m_dmlBindingTable->BindTemporaryResource(&DML_BINDING_DESC{ DML_BINDING_TYPE_BUFFER, &binding });
     }
 
     // Bind model inputs and outputs
-    bufferBindings[0] = DML_BUFFER_BINDING{ m_modelInput.Get() };
+    bufferBindings[0] = DML_BUFFER_BINDING{ m_modelInput->GetResource() };
 #if DML_MANAGED_WEIGHTS
     // Bind only the model input
     DML_BINDING_DESC inputBindings[] =
@@ -571,6 +586,6 @@ void Sample::InitializeDirectMLResources()
     m_dmlBindingTable->BindInputs(ARRAYSIZE(inputBindings), inputBindings);
 #endif
 
-    DML_BUFFER_BINDING outputBinding = { m_modelOutput.Get(), 0, m_modelOutput->GetDesc().Width };
+    DML_BUFFER_BINDING outputBinding = { m_modelOutput->GetResource(), 0, m_modelOutput->GetResource()->GetDesc().Width };
     m_dmlBindingTable->BindOutputs(1, &DML_BINDING_DESC{ DML_BINDING_TYPE_BUFFER, &outputBinding });
 }

@@ -27,7 +27,7 @@ namespace DirectX
     class ResourceUploadBatch
     {
     public:
-        explicit ResourceUploadBatch(_In_ ID3D12Device* device);
+        explicit ResourceUploadBatch(_In_ ID3D12Device* device, _In_ ResourceAllocator* resourceAllocator);
         ResourceUploadBatch(ResourceUploadBatch&& moveFrom) noexcept;
         ResourceUploadBatch& operator= (ResourceUploadBatch&& moveFrom) noexcept;
 

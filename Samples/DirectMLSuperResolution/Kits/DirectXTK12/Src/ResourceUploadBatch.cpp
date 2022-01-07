@@ -12,7 +12,10 @@
 #include "PlatformHelpers.h"
 #include "ResourceUploadBatch.h"
 
+#include <gpgmm_d3d12.h>
+
 using namespace DirectX;
+using namespace gpgmm::d3d12;
 using Microsoft::WRL::ComPtr;
 
 namespace DirectX
@@ -303,8 +306,9 @@ class ResourceUploadBatch::Impl
 {
 public:
     Impl(
-        _In_ ID3D12Device* device)
+        _In_ ID3D12Device* device, _In_ ResourceAllocator* resourceAllocator)
         : mDevice(device)
+        , mResourceAllocator(resourceAllocator)
         , mInBeginEndBlock(false)
         , mTypedUAVLoadAdditionalFormats(false)
         , mStandardSwizzle64KBSupported(false)
@@ -357,20 +361,22 @@ public:
         CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_UPLOAD);
         CD3DX12_RESOURCE_DESC resDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadSize);
 
+        gpgmm::d3d12::ALLOCATION_DESC allocationDesc = {};
+        allocationDesc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
+
         // Create a temporary buffer
-        ComPtr<ID3D12Resource> scratchResource = nullptr;
-        ThrowIfFailed(mDevice->CreateCommittedResource(
-            &heapProps,
-            D3D12_HEAP_FLAG_NONE,
-            &resDesc,
+        ComPtr<ResourceAllocation> scratchResource;
+        ThrowIfFailed(mResourceAllocator->CreateResource(
+            allocationDesc,
+            resDesc,
             D3D12_RESOURCE_STATE_GENERIC_READ,
             nullptr, // D3D12_CLEAR_VALUE* pOptimizedClearValue
-            IID_GRAPHICS_PPV_ARGS(scratchResource.GetAddressOf())));
+            &scratchResource));
 
-        SetDebugObjectName(scratchResource.Get(), L"ResourceUploadBatch Temporary");
+        SetDebugObjectName(scratchResource->GetResource(), L"ResourceUploadBatch Temporary");
 
         // Submit resource copy to command list
-        UpdateSubresources(mList.Get(), resource, scratchResource.Get(), 0, subresourceIndexStart, numSubresources, subRes);
+        UpdateSubresources(mList.Get(), resource, scratchResource->GetResource(), 0, subresourceIndexStart, numSubresources, subRes);
 
         // Remember this upload object for delayed release
         mTrackedObjects.push_back(scratchResource);
@@ -579,36 +585,40 @@ private:
         CD3DX12_HEAP_PROPERTIES defaultHeapProperties(D3D12_HEAP_TYPE_DEFAULT);
 
         // Create a staging resource if we have to
-        ComPtr<ID3D12Resource> staging;
+        ComPtr<ResourceAllocation> staging;
         if ((desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) == 0)
         {
             D3D12_RESOURCE_DESC stagingDesc = desc;
             stagingDesc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
             stagingDesc.Format = ConvertSRVtoResourceFormat(desc.Format);
 
-            ThrowIfFailed(mDevice->CreateCommittedResource(
-                &defaultHeapProperties,
-                D3D12_HEAP_FLAG_NONE,
-                &stagingDesc,
+            gpgmm::d3d12::ALLOCATION_DESC allocatorDesc = {};
+            allocatorDesc.HeapType = defaultHeapProperties.Type;
+
+            ThrowIfFailed(mResourceAllocator->CreateResource(
+                allocatorDesc,
+                stagingDesc,
                 D3D12_RESOURCE_STATE_COPY_DEST,
                 nullptr,
-                IID_GRAPHICS_PPV_ARGS(staging.GetAddressOf())));
+                &staging));
 
-            SetDebugObjectName(staging.Get(), L"GenerateMips Staging");
+            SetDebugObjectName(staging->GetResource(), L"GenerateMips Staging");
 
             // Copy the top mip of resource to staging
             Transition(resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
 
             CD3DX12_TEXTURE_COPY_LOCATION src(resource, 0);
-            CD3DX12_TEXTURE_COPY_LOCATION dst(staging.Get(), 0);
+            CD3DX12_TEXTURE_COPY_LOCATION dst(staging->GetResource(), 0);
             mList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
 
-            Transition(staging.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Transition(staging->GetResource(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         }
         else
         {
             // Resource is already a UAV so we can do this in-place
-            staging = resource;
+            ThrowIfFailed(mResourceAllocator->CreateResource(
+                resource,
+                &staging));
         }
 
         // Create a descriptor heap that holds our resource descriptors
@@ -632,7 +642,7 @@ private:
         srvDesc.Texture2D.MostDetailedMip = 0;
         srvDesc.Texture2D.MipLevels = desc.MipLevels;
 
-        mDevice->CreateShaderResourceView(staging.Get(), &srvDesc, handleIt);
+        mDevice->CreateShaderResourceView(staging->GetResource(), &srvDesc, handleIt);
 
         // Create the UAVs for the tail
         for (uint16_t mip = 1; mip < desc.MipLevels; ++mip)
@@ -643,19 +653,19 @@ private:
             uavDesc.Texture2D.MipSlice = mip;
 
             handleIt.Offset(descriptorSize);
-            mDevice->CreateUnorderedAccessView(staging.Get(), nullptr, &uavDesc, handleIt);
+            mDevice->CreateUnorderedAccessView(staging->GetResource(), nullptr, &uavDesc, handleIt);
         }
 
         // Set up UAV barrier (used in loop)
         D3D12_RESOURCE_BARRIER barrierUAV = {};
         barrierUAV.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
         barrierUAV.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-        barrierUAV.UAV.pResource = staging.Get();
+        barrierUAV.UAV.pResource = staging->GetResource();
 
         // Barrier for transitioning the subresources to UAVs
         D3D12_RESOURCE_BARRIER srv2uavDesc = {};
         srv2uavDesc.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        srv2uavDesc.Transition.pResource = staging.Get();
+        srv2uavDesc.Transition.pResource = staging->GetResource();
         srv2uavDesc.Transition.Subresource = 0;
         srv2uavDesc.Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         srv2uavDesc.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
@@ -663,7 +673,7 @@ private:
         // Barrier for transitioning the subresources to SRVs
         D3D12_RESOURCE_BARRIER uav2srvDesc = {};
         uav2srvDesc.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        uav2srvDesc.Transition.pResource = staging.Get();
+        uav2srvDesc.Transition.pResource = staging->GetResource();
         uav2srvDesc.Transition.Subresource = 0;
         uav2srvDesc.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         uav2srvDesc.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
@@ -724,13 +734,13 @@ private:
         }
 
         // If the staging resource is NOT the same as the resource, we need to copy everything back
-        if (staging.Get() != resource)
+        if (staging->GetResource() != resource)
         {
             // Transition the resources ready for copy
             D3D12_RESOURCE_BARRIER barrier[2] = {};
             barrier[0].Type = barrier[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             barrier[0].Transition.Subresource = barrier[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-            barrier[0].Transition.pResource = staging.Get();
+            barrier[0].Transition.pResource = staging->GetResource();
             barrier[0].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             barrier[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
 
@@ -741,7 +751,7 @@ private:
             mList->ResourceBarrier(2, barrier);
 
             // Copy the entire resource back
-            mList->CopyResource(resource, staging.Get());
+            mList->CopyResource(resource, staging->GetResource());
 
             // Transition the target resource back to pixel shader resource
             Transition(resource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -769,35 +779,37 @@ private:
 
         CD3DX12_HEAP_PROPERTIES heapProperties(D3D12_HEAP_TYPE_DEFAULT);
 
+        gpgmm::d3d12::ALLOCATION_DESC allocationDesc = {};
+        allocationDesc.HeapType = heapProperties.Type;
+
         // Create a resource with the same description, but without SRGB, and with UAV flags
-        ComPtr<ID3D12Resource> resourceCopy;
-        ThrowIfFailed(mDevice->CreateCommittedResource(
-            &heapProperties,
-            D3D12_HEAP_FLAG_NONE,
-            &copyDesc,
+        ComPtr<ResourceAllocation> resourceCopy;
+        ThrowIfFailed(mResourceAllocator->CreateResource(
+            allocationDesc,
+            copyDesc,
             D3D12_RESOURCE_STATE_COPY_DEST,
             nullptr,
-            IID_GRAPHICS_PPV_ARGS(resourceCopy.GetAddressOf())));
+            &resourceCopy));
 
-        SetDebugObjectName(resourceCopy.Get(), L"GenerateMips Resource Copy");
+        SetDebugObjectName(resourceCopy->GetResource(), L"GenerateMips Resource Copy");
 
         // Copy the top mip of resource data
         Transition(resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
 
         CD3DX12_TEXTURE_COPY_LOCATION src(resource, 0);
-        CD3DX12_TEXTURE_COPY_LOCATION dst(resourceCopy.Get(), 0);
+        CD3DX12_TEXTURE_COPY_LOCATION dst(resourceCopy->GetResource(), 0);
         mList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
 
-        Transition(resourceCopy.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        Transition(resourceCopy->GetResource(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         
         // Generate the mips
-        GenerateMips_UnorderedAccessPath(resourceCopy.Get());
+        GenerateMips_UnorderedAccessPath(resourceCopy->GetResource());
 
         // Direct copy back
         D3D12_RESOURCE_BARRIER barrier[2] = {};
         barrier[0].Type = barrier[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
         barrier[0].Transition.Subresource = barrier[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        barrier[0].Transition.pResource = resourceCopy.Get();
+        barrier[0].Transition.pResource = resourceCopy->GetResource();
         barrier[0].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
         barrier[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
 
@@ -808,7 +820,7 @@ private:
         mList->ResourceBarrier(2, barrier);
 
         // Copy the entire resource back
-        mList->CopyResource(resource, resourceCopy.Get());
+        mList->CopyResource(resource, resourceCopy->GetResource());
 
         Transition(resource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
@@ -925,7 +937,7 @@ private:
 
     struct UploadBatch
     {
-        std::vector<ComPtr<ID3D12DeviceChild>>  TrackedObjects;
+        std::vector<ComPtr<IUnknown>>  TrackedObjects;
         std::vector<SharedGraphicsResource>     TrackedMemoryResources;
         ComPtr<ID3D12GraphicsCommandList>       CommandList;
         ComPtr<ID3D12Fence>  			        Fence;
@@ -935,11 +947,12 @@ private:
     };
 
     ComPtr<ID3D12Device>                        mDevice;
+    ComPtr<ResourceAllocator>                   mResourceAllocator;
     ComPtr<ID3D12CommandAllocator>              mCmdAlloc;
     ComPtr<ID3D12GraphicsCommandList>           mList;
     std::unique_ptr<GenerateMipsResources>      mGenMipsResources;
 
-    std::vector<ComPtr<ID3D12DeviceChild>>      mTrackedObjects;
+    std::vector<ComPtr<IUnknown>>               mTrackedObjects;
     std::vector<SharedGraphicsResource>         mTrackedMemoryResources;
     bool                                        mInBeginEndBlock;
     bool                                        mTypedUAVLoadAdditionalFormats;
@@ -949,8 +962,8 @@ private:
 
 
 // Public constructor.
-ResourceUploadBatch::ResourceUploadBatch(_In_ ID3D12Device* device)
-    : pImpl(std::make_unique<Impl>(device))
+ResourceUploadBatch::ResourceUploadBatch(_In_ ID3D12Device* device, _In_ ResourceAllocator* resourceAllocator)
+    : pImpl(std::make_unique<Impl>(device, resourceAllocator))
 {
 }
 

@@ -44,6 +44,9 @@
 
 #include <atomic>
 
+#include <gpgmm_d3d12.h>
+
+using namespace gpgmm::d3d12;
 
 namespace DirectX
 {
@@ -61,7 +64,7 @@ namespace DirectX
         size_t Suballocate(_In_ size_t size, _In_ size_t alignment);
 
         void* BaseMemory() const { return mMemory; }
-        ID3D12Resource* UploadResource() const { return mUploadResource.Get(); }
+        ID3D12Resource* UploadResource() const { return mUploadResource->GetResource(); }
         D3D12_GPU_VIRTUAL_ADDRESS GpuAddress() const { return mGpuAddress; }
         size_t BytesUsed() const { return mOffset; }
         size_t Size() const { return mSize; }
@@ -77,7 +80,7 @@ namespace DirectX
         LinearAllocatorPage*                    pNextPage;
 
         void*                                   mMemory;
-        Microsoft::WRL::ComPtr<ID3D12Resource>  mUploadResource;
+        Microsoft::WRL::ComPtr<ResourceAllocation>  mUploadResource;
         Microsoft::WRL::ComPtr<ID3D12Fence>     mFence;
         uint64_t                                mPendingFence;
         D3D12_GPU_VIRTUAL_ADDRESS               mGpuAddress;
@@ -96,6 +99,7 @@ namespace DirectX
         // by 1 page (64k).
         LinearAllocator(
             _In_ ID3D12Device* pDevice,
+            _In_ ResourceAllocator* pResourceAllocator,
             _In_ size_t pageSize,
             _In_ size_t preallocateBytes = 0);
 
@@ -135,6 +139,7 @@ namespace DirectX
 
     private:
         Microsoft::WRL::ComPtr<ID3D12Device>    m_device;
+        Microsoft::WRL::ComPtr<ResourceAllocator>    m_resourceAllocator;
         LinearAllocatorPage*                    m_pendingPages; // Pages in use by the GPU
         LinearAllocatorPage*                    m_usedPages;    // Pages to be submitted to the GPU
         LinearAllocatorPage*                    m_unusedPages;  // Pages not being used right now

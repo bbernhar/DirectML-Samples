@@ -64,6 +64,7 @@ __declspec(align(16)) class SpriteBatch::Impl : public AlignedNew<SpriteBatch::I
 {
 public:
     Impl(_In_ ID3D12Device* device,
+         _In_ gpgmm::d3d12::ResourceAllocator* resourceAllocator,
          ResourceUploadBatch& upload,
          const SpriteBatchPipelineStateDescription& psoDesc,
          const D3D12_VIEWPORT* viewport);
@@ -181,16 +182,16 @@ private:
     // Only one of these helpers is allocated per D3D device, even if there are multiple SpriteBatch instances.
     struct DeviceResources
     {
-        DeviceResources(_In_ ID3D12Device* device, ResourceUploadBatch& upload);
+        DeviceResources(_In_ ID3D12Device* device, _In_ gpgmm::d3d12::ResourceAllocator* resourceAllocator, ResourceUploadBatch& upload);
 
-        ComPtr<ID3D12Resource> indexBuffer;
+        ComPtr<gpgmm::d3d12::ResourceAllocation> indexBuffer;
         D3D12_INDEX_BUFFER_VIEW indexBufferView;
         ComPtr<ID3D12RootSignature> rootSignatureStatic;
         ComPtr<ID3D12RootSignature> rootSignatureHeap; 
         ID3D12Device* mDevice;
 
     private:
-        void CreateIndexBuffer(_In_ ID3D12Device* device, ResourceUploadBatch& upload);
+        void CreateIndexBuffer(_In_ gpgmm::d3d12::ResourceAllocator* resourceAllocator, ResourceUploadBatch& upload);
         void CreateRootSignatures(_In_ ID3D12Device* device);
 
         static std::vector<short> CreateIndexValues();
@@ -198,12 +199,12 @@ private:
 
     // Per-device data.
     std::shared_ptr<DeviceResources> mDeviceResources;
-    static SharedResourcePool<ID3D12Device*, DeviceResources, ResourceUploadBatch&> deviceResourcesPool;
+    static SharedResourcePool<ID3D12Device*, DeviceResources, gpgmm::d3d12::ResourceAllocator*, ResourceUploadBatch&> deviceResourcesPool;
 };
 
 
 // Global pools of per-device and per-context SpriteBatch resources.
-SharedResourcePool<ID3D12Device*, SpriteBatch::Impl::DeviceResources, ResourceUploadBatch&> SpriteBatch::Impl::deviceResourcesPool;
+SharedResourcePool<ID3D12Device*, SpriteBatch::Impl::DeviceResources, gpgmm::d3d12::ResourceAllocator*, ResourceUploadBatch&> SpriteBatch::Impl::deviceResourcesPool;
 
 
 // Constants.
@@ -277,32 +278,34 @@ const D3D12_DEPTH_STENCIL_DESC SpriteBatchPipelineStateDescription::s_DefaultDep
 };
 
 // Per-device constructor.
-SpriteBatch::Impl::DeviceResources::DeviceResources(_In_ ID3D12Device* device, ResourceUploadBatch& upload) :
+SpriteBatch::Impl::DeviceResources::DeviceResources(_In_ ID3D12Device* device, _In_ gpgmm::d3d12::ResourceAllocator* resourceAllocator, ResourceUploadBatch& upload) :
     indexBufferView{},
     mDevice(device)
 {
-    CreateIndexBuffer(device, upload);
+    CreateIndexBuffer(resourceAllocator, upload);
     CreateRootSignatures(device);
 }
 
 // Creates the SpriteBatch index buffer.
-void SpriteBatch::Impl::DeviceResources::CreateIndexBuffer(_In_ ID3D12Device* device, ResourceUploadBatch& upload)
+void SpriteBatch::Impl::DeviceResources::CreateIndexBuffer(_In_ gpgmm::d3d12::ResourceAllocator* resourceAllocator, ResourceUploadBatch& upload)
 {
     static_assert((MaxBatchSize * VerticesPerSprite) < USHRT_MAX, "MaxBatchSize too large for 16-bit indices");
 
     CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_DEFAULT);
     CD3DX12_RESOURCE_DESC bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(sizeof(short) * MaxBatchSize * IndicesPerSprite);
 
+    gpgmm::d3d12::ALLOCATION_DESC allocationDesc = {};
+    allocationDesc.HeapType = heapProps.Type;
+
     // Create the constant buffer.
-    ThrowIfFailed(device->CreateCommittedResource(
-        &heapProps,
-        D3D12_HEAP_FLAG_NONE,
-        &bufferDesc,
+    ThrowIfFailed(resourceAllocator->CreateResource(
+        allocationDesc,
+        bufferDesc,
         D3D12_RESOURCE_STATE_COPY_DEST,
         nullptr,
-        IID_GRAPHICS_PPV_ARGS(indexBuffer.ReleaseAndGetAddressOf())));
+        &indexBuffer));
 
-    SetDebugObjectName(indexBuffer.Get(), L"SpriteBatch");
+    SetDebugObjectName(indexBuffer->GetResource(), L"SpriteBatch");
 
     auto indexValues = CreateIndexValues();
 
@@ -312,9 +315,9 @@ void SpriteBatch::Impl::DeviceResources::CreateIndexBuffer(_In_ ID3D12Device* de
     indexDataDesc.SlicePitch = indexDataDesc.RowPitch;
 
     // Upload the resource
-    upload.Upload(indexBuffer.Get(), 0, &indexDataDesc, 1);
-    upload.Transition(indexBuffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_INDEX_BUFFER);
-    SetDebugObjectName(indexBuffer.Get(), L"DirectXTK:SpriteBatch Index Buffer");
+    upload.Upload(indexBuffer->GetResource(), 0, &indexDataDesc, 1);
+    upload.Transition(indexBuffer->GetResource(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+    SetDebugObjectName(indexBuffer->GetResource(), L"DirectXTK:SpriteBatch Index Buffer");
 
     // Create the index buffer view
     indexBufferView.BufferLocation = indexBuffer->GetGPUVirtualAddress();
@@ -402,7 +405,7 @@ std::vector<short> SpriteBatch::Impl::DeviceResources::CreateIndexValues()
 
 // Per-SpriteBatch constructor.
 _Use_decl_annotations_
-SpriteBatch::Impl::Impl(ID3D12Device* device, ResourceUploadBatch& upload, const SpriteBatchPipelineStateDescription& psoDesc, const D3D12_VIEWPORT* viewport)
+SpriteBatch::Impl::Impl(ID3D12Device* device, _In_ gpgmm::d3d12::ResourceAllocator* resourceAllocator, ResourceUploadBatch& upload, const SpriteBatchPipelineStateDescription& psoDesc, const D3D12_VIEWPORT* viewport)
     : mRotation(DXGI_MODE_ROTATION_IDENTITY),
     mSetViewport(false),
     mViewPort{},
@@ -415,7 +418,7 @@ SpriteBatch::Impl::Impl(ID3D12Device* device, ResourceUploadBatch& upload, const
     mVertexSegment{},
     mVertexPageSize(sizeof(VertexPositionColorTexture) * MaxBatchSize * VerticesPerSprite),
     mSpriteCount(0),
-    mDeviceResources(deviceResourcesPool.DemandCreate(device, upload))
+    mDeviceResources(deviceResourcesPool.DemandCreate(device, resourceAllocator, upload))
 {
     if (viewport != nullptr)
     {
@@ -1002,10 +1005,11 @@ XMMATRIX SpriteBatch::Impl::GetViewportTransform(_In_ DXGI_MODE_ROTATION rotatio
 // Public constructor.
 _Use_decl_annotations_
 SpriteBatch::SpriteBatch(ID3D12Device* device,
+    gpgmm::d3d12::ResourceAllocator* resourceAllocator,
     ResourceUploadBatch& upload,
     const SpriteBatchPipelineStateDescription& psoDesc,
     const D3D12_VIEWPORT* viewport)
-    : pImpl(std::make_unique<Impl>(device, upload, psoDesc, viewport))
+    : pImpl(std::make_unique<Impl>(device, resourceAllocator, upload, psoDesc, viewport))
 {
 }
 

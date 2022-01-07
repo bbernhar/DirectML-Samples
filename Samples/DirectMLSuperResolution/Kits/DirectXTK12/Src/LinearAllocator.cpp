@@ -62,9 +62,11 @@ void LinearAllocatorPage::Release()
 //--------------------------------------------------------------------------------------
 LinearAllocator::LinearAllocator(
     _In_ ID3D12Device* pDevice,
+    _In_ ResourceAllocator* pResourceAllocator,
     _In_ size_t pageSize,
     _In_ size_t preallocateBytes)
     : m_device(pDevice)
+    , m_resourceAllocator(pResourceAllocator)
     , m_pendingPages(nullptr)
     , m_usedPages(nullptr)
     , m_unusedPages(nullptr)
@@ -278,15 +280,17 @@ LinearAllocatorPage* LinearAllocator::GetNewPage()
     CD3DX12_HEAP_PROPERTIES uploadHeapProperties(D3D12_HEAP_TYPE_UPLOAD);
     CD3DX12_RESOURCE_DESC bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(m_increment);
 
+    gpgmm::d3d12::ALLOCATION_DESC allocationDesc = {};
+    allocationDesc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
+
     // Allocate the upload heap
-    ComPtr<ID3D12Resource> spResource;
-    HRESULT hr = m_device->CreateCommittedResource(
-        &uploadHeapProperties,
-        D3D12_HEAP_FLAG_NONE,
-        &bufferDesc,
+    ComPtr<ResourceAllocation> spResource;
+    HRESULT hr = m_resourceAllocator->CreateResource(
+        allocationDesc,
+        bufferDesc,
         D3D12_RESOURCE_STATE_GENERIC_READ,
         nullptr,
-        IID_GRAPHICS_PPV_ARGS(spResource.ReleaseAndGetAddressOf()));
+        &spResource);
     if (FAILED(hr))
     {
         if (hr != E_OUTOFMEMORY)

@@ -16,6 +16,8 @@
 #include "ReadData.h"
 #include "Float16Compressor.h"
 
+#include <gpgmm_d3d12.h>
+
 const wchar_t* c_videoPath = L"FH3_540p60.mp4";
 const wchar_t* c_imagePath = L"Assets\\FH3_1_540p.png";
 
@@ -352,8 +354,8 @@ void Sample::Render()
         PIXBeginEvent(commandList, PIX_COLOR_DEFAULT, L"Render to texture");
 
         D3D12_RESOURCE_BARRIER barriers[] = {
-            CD3DX12_RESOURCE_BARRIER::Transition(m_finalResultTexture.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET),
-            CD3DX12_RESOURCE_BARRIER::Transition(m_modelOutput.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
+            CD3DX12_RESOURCE_BARRIER::Transition(m_finalResultTexture->GetResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET),
+            CD3DX12_RESOURCE_BARRIER::Transition(m_modelOutput->GetResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
             CD3DX12_RESOURCE_BARRIER::UAV(nullptr)    
         };
 
@@ -418,8 +420,8 @@ void Sample::Render()
         PIXBeginEvent(commandList, PIX_COLOR_DEFAULT, L"Render to screen");
 
         D3D12_RESOURCE_BARRIER barriers[] = {
-            CD3DX12_RESOURCE_BARRIER::Transition(m_finalResultTexture.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
-            CD3DX12_RESOURCE_BARRIER::Transition(m_modelOutput.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+            CD3DX12_RESOURCE_BARRIER::Transition(m_finalResultTexture->GetResource(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
+            CD3DX12_RESOURCE_BARRIER::Transition(m_modelOutput->GetResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
             CD3DX12_RESOURCE_BARRIER::UAV(nullptr)
         };
 
@@ -676,7 +678,7 @@ void Sample::CreateDeviceDependentResources()
 {
     auto device = m_deviceResources->GetD3DDevice();
 
-    m_graphicsMemory = std::make_unique<GraphicsMemory>(device);
+    m_graphicsMemory = std::make_unique<GraphicsMemory>(device, m_deviceResources->GetResourceAllocator());
 
     // Create descriptor heaps.
     {
@@ -814,6 +816,11 @@ void Sample::CreateTextureResources()
                 IID_PPV_ARGS(m_texPipelineStateLinear.ReleaseAndGetAddressOf())));
     }
 
+    auto resourceAllocator = m_deviceResources->GetResourceAllocator();
+
+    gpgmm::d3d12::ALLOCATION_DESC allocationDesc = {};
+    allocationDesc.HeapType = D3D12_HEAP_TYPE_UPLOAD;
+
     // Create vertex buffer for full screen texture render.
     {
         static const Vertex s_vertexData[4] =
@@ -829,12 +836,11 @@ void Sample::CreateTextureResources()
         // over. Please read up on Default Heap usage. An upload heap is used here for 
         // code simplicity and because there are very few verts to actually transfer.
         DX::ThrowIfFailed(
-            device->CreateCommittedResource(&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
-                D3D12_HEAP_FLAG_NONE,
-                &CD3DX12_RESOURCE_DESC::Buffer(sizeof(s_vertexData)),
+            resourceAllocator->CreateResource(allocationDesc,
+                CD3DX12_RESOURCE_DESC::Buffer(sizeof(s_vertexData)),
                 D3D12_RESOURCE_STATE_GENERIC_READ,
                 nullptr,
-                IID_PPV_ARGS(m_vertexBuffer.ReleaseAndGetAddressOf())));
+                &m_vertexBuffer));
 
         // Copy the quad data to the vertex buffer.
         UINT8* pVertexDataBegin;
@@ -886,12 +892,11 @@ void Sample::CreateTextureResources()
 
         // See note above
         DX::ThrowIfFailed(
-            device->CreateCommittedResource(&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
-                D3D12_HEAP_FLAG_NONE,
-                &CD3DX12_RESOURCE_DESC::Buffer(sizeof(s_indexData)),
+            resourceAllocator->CreateResource(allocationDesc,
+                CD3DX12_RESOURCE_DESC::Buffer(sizeof(s_indexData)),
                 D3D12_RESOURCE_STATE_GENERIC_READ,
                 nullptr,
-                IID_PPV_ARGS(m_indexBuffer.ReleaseAndGetAddressOf())));
+                &m_indexBuffer));
 
         // Copy the data to the index buffer.
         UINT8* pVertexDataBegin;
@@ -1035,8 +1040,8 @@ void Sample::CreateWeightTensors(
     const char* shiftLayerName,
     dml::Span<const uint32_t> filterSizes,
     DirectX::ResourceUploadBatch& uploadBatch,
-    _Out_writes_(1) ID3D12Resource** filterWeightResourceOut,
-    _Out_writes_opt_(1) ID3D12Resource** biasWeightResourceOut)
+    _Out_writes_(1) gpgmm::d3d12::ResourceAllocation** filterWeightResourceOut,
+    _Out_writes_opt_(1) gpgmm::d3d12::ResourceAllocation** biasWeightResourceOut)
 {
     // There are two types of weights for the convolutions: The convolution filters themselves, and scale/shift
     // weights used to normalize and bias the results. The final layer doesn't use scale and shift weights, so
@@ -1123,12 +1128,12 @@ void Sample::CreateWeightTensors(
     // Upload to the GPU
     D3D12_SUBRESOURCE_DATA weightsData = {};
     weightsData.pData = filterWeightsFP16.data();
-    uploadBatch.Upload(*filterWeightResourceOut, 0, &weightsData, 1);
+    uploadBatch.Upload((*filterWeightResourceOut)->GetResource(), 0, &weightsData, 1);
 
     if (useScaleShift)
     {
         weightsData.pData = biasWeightsFP16.data();
-        uploadBatch.Upload(*biasWeightResourceOut, 0, &weightsData, 1);
+        uploadBatch.Upload((*biasWeightResourceOut)->GetResource(), 0, &weightsData, 1);
     }
 }
 
@@ -1158,7 +1163,7 @@ void Sample::GetStrides(
 
 void Sample::CreateWeightResource(
     _In_reads_(4) const uint32_t* tensorSizes,
-    _Out_writes_(1) ID3D12Resource** d3dResourceOut)
+    _Out_writes_(1) gpgmm::d3d12::ResourceAllocation** d3dResourceOut)
 {
     uint32_t strides[4];
     GetStrides(tensorSizes, m_tensorLayout, strides);
@@ -1166,30 +1171,34 @@ void Sample::CreateWeightResource(
 
     D3D12_RESOURCE_DESC resourceDesc = CD3DX12_RESOURCE_DESC::Buffer(bufferSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
 
-    DX::ThrowIfFailed(m_deviceResources->GetD3DDevice()->CreateCommittedResource(
-        &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
-        D3D12_HEAP_FLAG_NONE,
-        &resourceDesc,
+    gpgmm::d3d12::ALLOCATION_DESC allocationDesc = {};
+    allocationDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+
+    DX::ThrowIfFailed(m_deviceResources->GetResourceAllocator()->CreateResource(
+        allocationDesc,
+        resourceDesc,
         D3D12_RESOURCE_STATE_COMMON,
         nullptr,
-        IID_PPV_ARGS(d3dResourceOut)
+        d3dResourceOut
     ));
 }
 
-void Sample::BindTempResourceIfNeeded(DML_BINDING_PROPERTIES& bindingProps, IDMLBindingTable* initBindingTable, ID3D12Resource** tempResource)
+void Sample::BindTempResourceIfNeeded(DML_BINDING_PROPERTIES& bindingProps, IDMLBindingTable* initBindingTable, gpgmm::d3d12::ResourceAllocation** tempResource)
 {
     if (bindingProps.TemporaryResourceSize > 0)
     {
         D3D12_RESOURCE_DESC resourceDesc = CD3DX12_RESOURCE_DESC::Buffer(bindingProps.TemporaryResourceSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-        DX::ThrowIfFailed(m_deviceResources->GetD3DDevice()->CreateCommittedResource(
-            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
-            D3D12_HEAP_FLAG_NONE,
-            &resourceDesc,
+        gpgmm::d3d12::ALLOCATION_DESC allocationDesc = {};
+        allocationDesc.HeapType = D3D12_HEAP_TYPE_DEFAULT;
+
+        DX::ThrowIfFailed(m_deviceResources->GetResourceAllocator()->CreateResource(
+            allocationDesc,
+            resourceDesc,
             D3D12_RESOURCE_STATE_COMMON,
             nullptr,
-            IID_PPV_ARGS(tempResource)));
+            tempResource));
 
-        DML_BUFFER_BINDING tempBuffer = { *tempResource, 0, (*tempResource)->GetDesc().Width };
+        DML_BUFFER_BINDING tempBuffer = { (*tempResource)->GetResource(), 0, (*tempResource)->GetResource()->GetDesc().Width };
         DML_BINDING_DESC tempBinding = { DML_BINDING_TYPE_BUFFER, &tempBuffer };
         initBindingTable->BindTemporaryResource(&tempBinding);
     }
@@ -1207,10 +1216,10 @@ void Sample::CreateUIResources()
     m_lineEffect = std::make_unique<BasicEffect>(device, EffectFlags::VertexColor, epd);
 
     SpriteBatchPipelineStateDescription spd(rtState, &CommonStates::AlphaBlend);
-    ResourceUploadBatch uploadBatch(device);
+    ResourceUploadBatch uploadBatch(device, m_deviceResources->GetResourceAllocator());
     uploadBatch.Begin();
 
-    m_spriteBatch = std::make_unique<SpriteBatch>(device, uploadBatch, spd);
+    m_spriteBatch = std::make_unique<SpriteBatch>(device, m_deviceResources->GetResourceAllocator(), uploadBatch, spd);
 
     wchar_t strFilePath[MAX_PATH] = {};
     DX::FindMediaFile(strFilePath, MAX_PATH, L"SegoeUI_30.spritefont");

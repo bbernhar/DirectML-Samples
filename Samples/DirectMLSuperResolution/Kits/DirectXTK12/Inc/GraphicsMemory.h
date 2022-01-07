@@ -17,6 +17,10 @@
 
 #include <memory>
 
+#include <gpgmm_d3d12.h>
+
+using namespace gpgmm::d3d12;
+
 
 namespace DirectX
 {
@@ -108,7 +112,7 @@ namespace DirectX
     class GraphicsMemory
     {
     public:
-        explicit GraphicsMemory(_In_ ID3D12Device* device);
+        explicit GraphicsMemory(_In_ ID3D12Device* device, _In_ ResourceAllocator* resourceAllocator);
 
         GraphicsMemory(GraphicsMemory&& moveFrom) noexcept;
         GraphicsMemory& operator= (GraphicsMemory&& moveFrom) noexcept;

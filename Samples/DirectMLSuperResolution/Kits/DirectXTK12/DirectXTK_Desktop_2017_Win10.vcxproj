@@ -584,6 +584,7 @@
     <OutDir>Bin\Desktop_2017_Win10\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>Bin\Desktop_2017_Win10\$(Platform)\$(Configuration)\</IntDir>
     <TargetName>DirectXTK12</TargetName>
+    <IncludePath>C:\Users\Bryan\src\gpgmm\src\include;C:\Users\Bryan\src\gpgmm;$(VC_IncludePath);$(WindowsSDK_IncludePath);</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
     <OutDir>Bin\Desktop_2017_Win10\$(Platform)\$(Configuration)\</OutDir>
@@ -681,7 +682,7 @@
       <Optimization>MaxSpeed</Optimization>
       <PreprocessorDefinitions>_WIN32_WINNT=0x0A00;_WIN7_PLATFORM_UPDATE;WIN32;NDEBUG;_LIB;_CRT_STDIO_ARBITRARY_WIDE_SPECIFIERS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>$(ProjectDir)Inc;$(ProjectDir)Src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)Inc;$(ProjectDir)Src;C:\Users\Bryan\src\gpgmm\src;C:\Users\Bryan\src\gpgmm\src\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <FloatingPointModel>Fast</FloatingPointModel>
       <ProgramDataBaseFileName>$(IntDir)$(TargetName).pdb</ProgramDataBaseFileName>
       <SDLCheck>true</SDLCheck>

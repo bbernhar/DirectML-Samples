@@ -18,6 +18,8 @@
 build/
 dist/
 *.egg-info/
+*.eggs
+dependencies/
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
